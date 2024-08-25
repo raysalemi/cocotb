@@ -31,8 +31,8 @@ import pytest
 import cocotb
 from cocotb.clock import Clock
 from cocotb.decorators import bridge
-from cocotb.sim_time_utils import get_sim_time
 from cocotb.triggers import ReadOnly, RisingEdge, Timer
+from cocotb.utils import get_sim_time
 
 
 def return_two(dut):
@@ -331,7 +331,7 @@ async def test_resume_from_weird_thread_fails(dut):
     assert not func_started, "Function should never have started"
     assert raised, "No exception was raised to warn the user"
 
-    await task.join()
+    await task
 
 
 @cocotb.test()

@@ -32,6 +32,7 @@
 #include <stdexcept>
 
 #include "VpiImpl.h"
+#include "gpi.h"
 
 int VpiSignalObjHdl::initialise(const std::string &name,
                                 const std::string &fq_name) {
@@ -202,16 +203,18 @@ int VpiSignalObjHdl::set_signal_value(s_vpi_value value_s,
 
     switch (action) {
         case GPI_DEPOSIT:
+#if defined(MODELSIM) || defined(IUS)
+            // Xcelium and Questa do not like setting string variables using
+            // vpiInertialDelay.
             if (vpiStringVar ==
                 vpi_get(vpiType, GpiObjHdl::get_handle<vpiHandle>())) {
-                // assigning to a vpiStringVar only seems to work with
-                // vpiNoDelay
                 vpi_put_flag = vpiNoDelay;
             } else {
-                // Use Inertial delay to schedule an event, thus behaving like a
-                // verilog testbench
                 vpi_put_flag = vpiInertialDelay;
             }
+#else
+            vpi_put_flag = vpiInertialDelay;
+#endif
             break;
         case GPI_FORCE:
             vpi_put_flag = vpiForceFlag;
@@ -239,27 +242,11 @@ int VpiSignalObjHdl::set_signal_value(s_vpi_value value_s,
 }
 
 GpiCbHdl *VpiSignalObjHdl::register_value_change_callback(
-    int edge, int (*function)(void *), void *cb_data) {
-    VpiValueCbHdl *cb = NULL;
-
-    switch (edge) {
-        case 1:
-            cb = &m_rising_cb;
-            break;
-        case 2:
-            cb = &m_falling_cb;
-            break;
-        case 3:
-            cb = &m_either_cb;
-            break;
-        default:
-            return NULL;
-    }
-
+    gpi_edge_e edge, int (*function)(void *), void *cb_data) {
+    VpiValueCbHdl *cb = new VpiValueCbHdl(this->m_impl, this, edge);
     cb->set_user_data(function, cb_data);
     if (cb->arm_callback()) {
         return NULL;
     }
-
     return cb;
 }

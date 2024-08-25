@@ -25,7 +25,6 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import collections.abc
 import enum
 import logging
 import re
@@ -52,6 +51,7 @@ import cocotb._conf
 from cocotb import simulator
 from cocotb._deprecation import deprecated
 from cocotb._py_compat import cached_property
+from cocotb._utils import cached_method
 from cocotb.types import Array, Logic, LogicArray, Range
 
 
@@ -250,6 +250,7 @@ class HierarchyObjectBase(SimHandleBase, Generic[KeyType]):
     def __init__(self, handle: simulator.gpi_sim_hdl, path: Optional[str]) -> None:
         super().__init__(handle, path)
         self._sub_handles: Dict[KeyType, SimHandleBase] = {}
+        self._discovered = False
 
     def _keys(self) -> Iterable[KeyType]:
         """Iterate over the keys (name or index) of the child objects.
@@ -275,13 +276,15 @@ class HierarchyObjectBase(SimHandleBase, Generic[KeyType]):
         self._discover_all()
         return self._sub_handles.items()
 
-    @lru_cache(maxsize=None)
     def _discover_all(self) -> None:
         """When iterating or performing IPython tab completion, we run through ahead of
         time and discover all possible children, populating the :any:`_sub_handles`
         mapping. Hierarchy can't change after elaboration so we only have to
         do this once.
         """
+        if self._discovered:
+            return
+
         for thing in self._handle.iterate(simulator.OBJECTS):
             name = thing.get_name_string()
 
@@ -309,6 +312,8 @@ class HierarchyObjectBase(SimHandleBase, Generic[KeyType]):
 
             # add to cache
             self._sub_handles[key] = hdl
+
+        self._discovered = True
 
     def __getitem__(self, key: KeyType) -> SimHandleBase:
         # try to use cached value
@@ -566,7 +571,6 @@ class HierarchyArrayObject(HierarchyObjectBase[int], RangeableObjectMixin):
             raise IndexError(str(e)) from None
 
     # ideally `__len__` could be implemented in terms of `range`, but `range` doesn't work universally.
-    __len__ = HierarchyObjectBase.__len__
 
     def __iter__(self) -> Iterator[SimHandleBase]:
         # must use `sorted(self._keys())` instead of the range because `range` doesn't work universally.
@@ -836,10 +840,6 @@ class ArrayObject(
             [ValueObjectBase[Any, Any], Callable[..., None], Sequence[Any]], None
         ],
     ) -> None:
-        if not isinstance(value, (collections.abc.Sequence, Array)):
-            raise TypeError(
-                f"Assigning non-list value to object {self._name} of type {type(self)}"
-            )
         if len(value) != len(self):
             raise ValueError(
                 "Assigning list of length %d to object %s of length %d"
@@ -899,7 +899,7 @@ class LogicObject(
             [ValueObjectBase[Any, Any], Callable[..., None], Sequence[Any]], None
         ],
     ) -> None:
-        value_: LogicArray
+        value_: str
         if isinstance(value, int):
             min_val, max_val = _value_limits(len(self), _Limits.VECTOR_NBIT)
             if min_val <= value <= max_val:
@@ -909,15 +909,20 @@ class LogicObject(
                     )
                     return
 
+                # LogicArray used for checking
                 if value < 0:
-                    value_ = LogicArray.from_signed(
-                        value,
-                        Range(len(self) - 1, "downto", 0),
+                    value_ = str(
+                        LogicArray.from_signed(
+                            value,
+                            Range(len(self) - 1, "downto", 0),
+                        )
                     )
                 else:
-                    value_ = LogicArray.from_unsigned(
-                        value,
-                        Range(len(self) - 1, "downto", 0),
+                    value_ = str(
+                        LogicArray.from_unsigned(
+                            value,
+                            Range(len(self) - 1, "downto", 0),
+                        )
                     )
             else:
                 raise OverflowError(
@@ -925,28 +930,29 @@ class LogicObject(
                 )
 
         elif isinstance(value, str):
-            value_ = LogicArray(value, self.range)
+            # LogicArray used for checking
+            value_ = str(LogicArray(value, self.range))
 
         elif isinstance(value, LogicArray):
             if len(self) != len(value):
                 raise ValueError(
                     f"cannot assign value of length {len(value)} to handle of length {len(self)}"
                 )
-            value_ = value
+            value_ = str(value)
 
         elif isinstance(value, Logic):
             if len(self) != 1:
                 raise ValueError(
                     f"cannot assign value of length 1 to handle of length {len(self)}"
                 )
-            value_ = LogicArray([value])
+            value_ = str(value)
 
         else:
             raise TypeError(
                 f"Unsupported type for value assignment: {type(value)} ({value!r})"
             )
 
-        schedule_write(self, self._handle.set_signal_val_binstr, (action, str(value_)))
+        schedule_write(self, self._handle.set_signal_val_binstr, (action, value_))
 
     @property
     def value(self) -> LogicArray:
@@ -979,7 +985,7 @@ class LogicObject(
             ``sum(v << (d['bits'] * i) for i, v in enumerate(d['values']))`` instead.
         """
         binstr = self._handle.get_signal_val_binstr()
-        return LogicArray(binstr)
+        return LogicArray._from_handle(binstr)
 
     @value.setter
     def value(self, value: LogicArray) -> None:
@@ -997,7 +1003,7 @@ class LogicObject(
     def __str__(self) -> str:
         return str(self.value)
 
-    @lru_cache(maxsize=None)
+    @cached_method
     def __len__(self) -> int:
         # can't use `range` to get length because `range` is for outer-most dimension only
         # and this object needs to support multi-dimensional packed arrays.

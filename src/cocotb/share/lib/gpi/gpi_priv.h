@@ -166,7 +166,7 @@ class GPI_EXPORT GpiSignalObjHdl : public GpiObjHdl {
     // but the explicit ones are probably better
 
     virtual GpiCbHdl *register_value_change_callback(
-        int edge, int (*gpi_function)(void *), void *gpi_cb_data) = 0;
+        gpi_edge_e edge, int (*gpi_function)(void *), void *gpi_cb_data) = 0;
 };
 
 /* GPI Callback handle */
@@ -178,34 +178,28 @@ class GPI_EXPORT GpiCbHdl : public GpiHdl {
 
     // Pure virtual functions for derived classes
     virtual int arm_callback() = 0;  // Register with simulator
-    virtual int run_callback() = 0;  // Entry point from simulator
+    virtual int run_callback();      // Entry point from simulator
     virtual int
     cleanup_callback() = 0;  // Cleanup the callback, arm can be called after
 
     void set_call_state(gpi_cb_state_e new_state);
     gpi_cb_state_e get_call_state();
 
+    int set_user_data(int (*function)(void *), void *cb_data);
+
     virtual ~GpiCbHdl();
 
   protected:
     gpi_cb_state_e m_state =
         GPI_FREE;  // GPI state of the callback through its cycle
-};
-
-class GPI_EXPORT GpiCommonCbHdl : public virtual GpiCbHdl {
-  public:
-    GpiCommonCbHdl(GpiImplInterface *impl) : GpiCbHdl(impl) {}
-    int run_callback() override;
-    int set_user_data(int (*function)(void *), void *cb_data);
-
-  protected:
     int (*gpi_function)(void *) = nullptr;  // GPI function to callback
     void *m_cb_data = nullptr;  // GPI data supplied to "gpi_function"
 };
 
-class GPI_EXPORT GpiValueCbHdl : public virtual GpiCommonCbHdl {
+class GPI_EXPORT GpiValueCbHdl : public virtual GpiCbHdl {
   public:
-    GpiValueCbHdl(GpiImplInterface *impl, GpiSignalObjHdl *signal, int edge);
+    GpiValueCbHdl(GpiImplInterface *impl, GpiSignalObjHdl *signal,
+                  gpi_edge_e edge);
     int run_callback() override;
 
   protected:

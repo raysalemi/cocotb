@@ -541,8 +541,7 @@ def outdated(output: Path, dependencies: Sequence[Path]) -> bool:
     dep_mtime = 0.0
     for dependency in dependencies:
         mtime = dependency.stat().st_mtime
-        if mtime > dep_mtime:
-            dep_mtime = mtime
+        dep_mtime = max(mtime, dep_mtime)
 
     return dep_mtime > output_mtime
 
@@ -1366,9 +1365,10 @@ class Xcelium(Runner):
             verbosity_opts += ["-plinowarn"]
 
         vhpi_opts = []
-        # Xcelium 23.09.004 fixes cocotb issue #1076 as long as the
-        # following define is set.
-        vhpi_opts.append("-NEW_VHPI_PROPAGATE_DELAY")
+        if self.vhdl_sources or any(is_vhdl_source(src) for src in self.sources):
+            # Xcelium 23.09.004 fixes cocotb issue #1076 as long as the
+            # following define is set.
+            vhpi_opts.append("-NEW_VHPI_PROPAGATE_DELAY")
 
         cmds = [
             ["xrun"]
@@ -1444,9 +1444,10 @@ class Xcelium(Runner):
             input_tcl = ["-input", "@run; exit;"]
 
         vhpi_opts = []
-        # Xcelium 23.09.004 fixes cocotb issue #1076 as long as the
-        # following define is set.
-        vhpi_opts.append("-NEW_VHPI_PROPAGATE_DELAY")
+        if self.vhdl_sources or any(is_vhdl_source(src) for src in self.sources):
+            # Xcelium 23.09.004 fixes cocotb issue #1076 as long as the
+            # following define is set.
+            vhpi_opts.append("-NEW_VHPI_PROPAGATE_DELAY")
 
         cmds = [["mkdir", "-p", tmpdir]]
         cmds += [

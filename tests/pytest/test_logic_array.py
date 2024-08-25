@@ -6,56 +6,93 @@ import pytest
 from cocotb.types import Logic, LogicArray, Range
 
 
-def test_logic_array_constructor():
-    LogicArray([False, 1, "X", Logic("Z")])
-    l = LogicArray("01XZ")
-    assert all(isinstance(v, Logic) for v in l)
-    with pytest.raises(ValueError):
-        LogicArray([object()])
-
-    assert LogicArray(range=Range(0, "to", 3)) == LogicArray("XXXX")
-
-    with pytest.raises(TypeError):
-        LogicArray(object())
+def test_logic_array_str_construction():
+    LogicArray("01XZ")
+    assert LogicArray("1010", Range(0, "to", 3)) == LogicArray("1010")
 
     with pytest.raises(OverflowError):
         LogicArray("101010", Range(0, "to", 0))
 
     with pytest.raises(ValueError):
+        LogicArray("5h7_@")
+
+
+def test_logic_array_iterable_construction():
+    assert LogicArray([False, 1, "X", Logic("Z")]) == LogicArray("01XZ")
+    assert LogicArray((1, 0, 1, 0), Range(0, "to", 3)) == LogicArray("1010")
+
+    def gen():
+        yield True
+        yield 0
+        yield "X"
+        yield Logic("Z")
+
+    assert LogicArray(gen()) == LogicArray("10XZ")
+
+    with pytest.raises(OverflowError):
+        LogicArray([1, 0, 1, 0], Range(1, "downto", 0))
+    with pytest.raises(ValueError):
+        LogicArray([object()])
+
+
+def test_logic_array_int_construction():
+    with pytest.raises(TypeError):
+        LogicArray(10)  # refuse temptation to guess
+    assert LogicArray(10, Range(5, "downto", 0)) == LogicArray("001010")
+
+    with pytest.raises(OverflowError):
+        LogicArray(10, Range(1, "to", 3))
+    with pytest.raises(ValueError):
+        LogicArray(-10, Range(7, "downto", 0))
+
+
+def test_logic_array_default_construction():
+    assert LogicArray(range=Range(0, "to", 3)) == LogicArray("XXXX")
+
+
+def test_logic_array_bad_construction():
+    with pytest.raises(TypeError):
+        LogicArray(object())
+    with pytest.raises(TypeError):
+        LogicArray(range=dict())
+    with pytest.raises(TypeError):
         LogicArray()
 
 
-def test_logic_array_constructor_deprecated():
-    with pytest.warns(DeprecationWarning):
-        assert LogicArray(0xA7) == LogicArray("10100111")
-    with pytest.warns(DeprecationWarning):
-        assert LogicArray(10, Range(5, "downto", 0)) == LogicArray("001010")
-
-    with pytest.warns(DeprecationWarning):
-        assert LogicArray(-1) == LogicArray("1")
-    with pytest.warns(DeprecationWarning):
-        assert LogicArray(-2, Range(5, "downto", 0)) == LogicArray("111110")
-
-    with pytest.raises(OverflowError):
-        with pytest.warns(DeprecationWarning):
-            LogicArray(10, Range(1, "to", 3))
-    with pytest.raises(OverflowError):
-        with pytest.warns(DeprecationWarning):
-            LogicArray(-45, Range(1, "to", 3))
-
-
-def test_logic_array_int_conversion():
-    assert LogicArray.from_unsigned(0xA7) == LogicArray("10100111")
+def test_logic_array_unsigned_conversion():
     assert LogicArray.from_unsigned(10, Range(5, "downto", 0)) == LogicArray("001010")
-    with pytest.raises(OverflowError):
-        LogicArray.from_unsigned(-10)
+
     with pytest.raises(OverflowError):
         LogicArray.from_unsigned(10, Range(1, "to", 3))
 
-    assert LogicArray.from_signed(-1) == LogicArray("1")
+    with pytest.raises(ValueError):
+        LogicArray.from_unsigned(-10, Range(7, "downto", 0))
+
+    with pytest.raises(TypeError):
+        LogicArray.from_unsigned(object(), Range(3, "downto", 0))
+    with pytest.raises(TypeError):
+        LogicArray.from_unsigned(10, "lol")
+
+
+def test_logic_array_signed_conversion():
     assert LogicArray.from_signed(-2, Range(5, "downto", 0)) == LogicArray("111110")
+
     with pytest.raises(OverflowError):
         LogicArray.from_signed(-45, Range(1, "to", 3))
+
+    with pytest.raises(TypeError):
+        LogicArray.from_signed(object(), Range(3, "downto", 0))
+    with pytest.raises(TypeError):
+        LogicArray.from_signed(10, "lol")
+
+
+def test_logic_array_bytes_conversion():
+    assert LogicArray.from_bytes(b"12") == LogicArray("0011000100110010")
+
+    with pytest.raises(OverflowError):
+        LogicArray.from_bytes(b"123", Range(6, "downto", 0))
+
+    assert LogicArray("00101010").to_bytes() == b"\x2a"
 
 
 def test_logic_array_properties():
@@ -140,9 +177,19 @@ def test_logic_array_literal_casts():
 
 def test_equality():
     # fmt: off
+    # cross product of all impls
     assert LogicArray("0101", Range(0, 'to', 3)) == LogicArray("0101", Range(0, 'to', 3))
-    assert LogicArray("0101", Range(0, 'to', 3)) == LogicArray("0101", Range(7, 'downto', 4))
-    assert LogicArray("0101", Range(0, 'to', 3)) != LogicArray("1010", Range(0, 'to', 3))
+    assert LogicArray("0101", Range(0, 'to', 3)) == LogicArray(0b0101, Range(0, 'to', 3))
+    assert LogicArray("0101", Range(0, 'to', 3)) == LogicArray([0, 1, 0, 1], Range(0, 'to', 3))
+    assert LogicArray(0b0101, Range(0, 'to', 3)) == LogicArray("0101", Range(0, 'to', 3))
+    assert LogicArray(0b0101, Range(0, 'to', 3)) == LogicArray(0b0101, Range(0, 'to', 3))
+    assert LogicArray(0b0101, Range(0, 'to', 3)) == LogicArray([0, 1, 0, 1], Range(0, 'to', 3))
+    assert LogicArray([0, 1, 0, 1], Range(0, 'to', 3)) == LogicArray("0101", Range(0, 'to', 3))
+    assert LogicArray([0, 1, 0, 1], Range(0, 'to', 3)) == LogicArray(0b0101, Range(0, 'to', 3))
+    assert LogicArray([0, 1, 0, 1], Range(0, 'to', 3)) == LogicArray([0, 1, 0, 1], Range(0, 'to', 3))
+    assert LogicArray("0101", Range(0, 'to', 3)) == LogicArray("0101", Range(7, 'downto', 4)) # equality works regardless of range
+    assert LogicArray("0101", Range(0, 'to', 3)) != LogicArray("1010", Range(0, 'to', 3))  # wrong value same lengths
+    assert LogicArray("0101", Range(0, 'to', 3)) != LogicArray("010101")  # different lengths
     # fmt: on
     assert LogicArray("0101") == "0101"
     assert LogicArray("0101") == [0, 1, 0, 1]
@@ -151,6 +198,7 @@ def test_equality():
     assert LogicArray("0101") != object()
     assert LogicArray("0101") != "lol"
     assert LogicArray("0101") != 123
+    assert LogicArray("0101") != [7, "f", dict]
 
 
 def test_repr_eval():
@@ -160,6 +208,7 @@ def test_repr_eval():
 
 def test_iter():
     val = [Logic(0), Logic(1), Logic("X"), Logic("Z")]
+    assert all(isinstance(v, Logic) for v in val)
     a = LogicArray(val)
     assert list(a) == val
 
@@ -263,3 +312,45 @@ def test_changing_range():
         a.range = range(10)
     with pytest.raises(ValueError):
         a.range = Range(7, "downto", 0)
+
+
+def test_null_vector():
+    null_range = Range(-1, "downto", 0)
+    assert len(null_range) == 0
+
+    # test construction doesn't fail
+    LogicArray("")
+    LogicArray("", null_range)
+    LogicArray([])
+    LogicArray([], null_range)
+    with pytest.raises(OverflowError):
+        LogicArray(0, null_range)
+    LogicArray(range=null_range)
+    with pytest.raises(OverflowError):
+        LogicArray.from_unsigned(0, null_range)
+    with pytest.raises(OverflowError):
+        LogicArray.from_signed(0, null_range)
+
+    null_vector = LogicArray("")
+
+    # test attributes
+    assert len(null_vector) == 0
+    assert list(null_vector) == []
+    assert str(null_vector) == ""
+    with pytest.warns(UserWarning):
+        assert int(null_vector) == 0
+    with pytest.warns(UserWarning):
+        assert null_vector.to_signed() == 0
+    with pytest.warns(UserWarning):
+        assert null_vector.to_unsigned() == 0
+
+    # test comparison
+    assert null_vector == LogicArray("")
+    assert null_vector == LogicArray("", null_range)
+    assert null_vector == LogicArray([])
+    assert null_vector == LogicArray([], null_range)
+    assert null_vector == LogicArray(range=null_range)
+    with pytest.warns(UserWarning):
+        assert null_vector == 0
+    assert null_vector == ""
+    assert null_vector == []

@@ -19,14 +19,13 @@ import pytest
 from common import MyException
 
 import cocotb
-import cocotb.sim_time_utils
+import cocotb.utils
 from cocotb.clock import Clock
 from cocotb.task import Task
 from cocotb.triggers import (
     Combine,
     Event,
     First,
-    Join,
     NullTrigger,
     ReadOnly,
     RisingEdge,
@@ -41,7 +40,7 @@ test_flag = False
 
 async def clock_yield(task):
     global test_flag
-    await task.join()
+    await task
     test_flag = True
 
 
@@ -341,10 +340,9 @@ async def test_task_repr(dut):
 
     async def coroutine_inner():
         await coro_e.wait()
-        this_task = coro_e.data
         # cr_await is None while the coroutine is running, so we can't get the stack...
-        log.info(repr(this_task))
-        assert re.match(r"<Task \d+ running coro=coroutine_outer\(\)>", repr(this_task))
+        log.info(repr(coro_task))
+        assert re.match(r"<Task \d+ running coro=coroutine_outer\(\)>", repr(coro_task))
 
         await Combine(*(cocotb.start_soon(coroutine_wait()) for _ in range(2)))
 
@@ -359,7 +357,7 @@ async def test_task_repr(dut):
     coro_task = await cocotb.start(coroutine_outer())
 
     # let coroutine_inner run up to the await Combine
-    coro_e.set(coro_task)
+    coro_e.set()
     await NullTrigger()
 
     log.info(repr(coro_task))
@@ -480,7 +478,7 @@ async def test_test_repr(_):
     """Test RunningTest.__repr__"""
     log = logging.getLogger("cocotb.test")
 
-    current_test = cocotb._scheduler_inst._test
+    current_test = cocotb.regression_manager._test_task
     log.info(repr(current_test))
     assert re.match(
         r"<Test test_test_repr running coro=test_test_repr\(\)>", repr(current_test)
@@ -498,7 +496,7 @@ class TestClassRepr(Coroutine):
     async def check_repr(self, dut):
         log = logging.getLogger("cocotb.test")
 
-        current_test = cocotb._scheduler_inst._test
+        current_test = cocotb.regression_manager._test_task
         log.info(repr(current_test))
         assert re.match(
             r"<Test TestClassRepr running coro=TestClassRepr\(\)>", repr(current_test)
@@ -568,9 +566,9 @@ async def test_await_start_soon(_):
     """Test awaiting start_soon queued coroutine before it starts."""
 
     async def coro():
-        start_time = cocotb.sim_time_utils.get_sim_time(units="ns")
+        start_time = cocotb.utils.get_sim_time(units="ns")
         await Timer(1, "ns")
-        assert cocotb.sim_time_utils.get_sim_time(units="ns") == start_time + 1
+        assert cocotb.utils.get_sim_time(units="ns") == start_time + 1
 
     coro = cocotb.start_soon(coro())
 
@@ -824,23 +822,6 @@ async def test_multiple_concurrent_test_fails(_) -> None:
     cocotb.start_soon(call_error(thing))
     cocotb.start_soon(call_error(thing))
     await Timer(10, "ns")
-
-
-@cocotb.test
-async def test_get_task_from_join(_) -> None:
-    async def noop():
-        pass
-
-    t = cocotb.start_soon(noop())
-    j = await t.join()
-    assert isinstance(j, Join)
-    assert j.task is t
-    assert re.match(r"Join\(<Task \d+>\)", repr(j))
-
-    t = cocotb.start_soon(noop())
-    j = await Join(t)
-    assert isinstance(j, Join)
-    assert j.task is t
 
 
 @cocotb.test

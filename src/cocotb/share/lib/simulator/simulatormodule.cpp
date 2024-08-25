@@ -34,9 +34,6 @@
  * Uses GPI calls to interface to the simulator.
  */
 
-static int takes = 0;
-static int releases = 0;
-
 #include <Python.h>
 #include <cocotb_utils.h>    // to_python to_simulator
 #include <py_gpi_logging.h>  // py_gpi_logger_set_level
@@ -57,14 +54,22 @@ static int releases = 0;
 #define MODULE_NAME "simulator"
 
 // callback user data
-struct callback_data {
-    PyThreadState *_saved_thread_state;  // Thread state of the calling thread
-                                         // FIXME is this required?
-    uint32_t id_value;   // COCOTB_ACTIVE_ID or COCOTB_INACTIVE_ID
-    PyObject *function;  // Function to call when the callback fires
-    PyObject *args;      // The arguments to call the function with
-    PyObject *kwargs;    // Keyword arguments to call the function with
-    gpi_sim_hdl cb_hdl;
+struct PythonCallback {
+    PythonCallback(PyObject *func, PyObject *args, PyObject *kwargs)
+        : function(func), args(args), kwargs(kwargs) {
+        // All PyObject references are stolen.
+        // Arguments may be NULL.
+    }
+    ~PythonCallback() {
+        Py_XDECREF(function);
+        Py_XDECREF(args);
+        Py_XDECREF(kwargs);
+    }
+    uint32_t id_value =
+        COCOTB_ACTIVE_ID;  // COCOTB_ACTIVE_ID or COCOTB_INACTIVE_ID
+    PyObject *function;    // Function to call when the callback fires
+    PyObject *args;        // The arguments to call the function with
+    PyObject *kwargs;      // Keyword arguments to call the function with
 };
 
 class GpiClock;
@@ -163,17 +168,6 @@ PyTypeObject gpi_hdl_Object<gpi_clk_hdl>::py_type;
 
 typedef int (*gpi_function_t)(void *);
 
-PyGILState_STATE TAKE_GIL(void) {
-    PyGILState_STATE state = PyGILState_Ensure();
-    takes++;
-    return state;
-}
-
-void DROP_GIL(PyGILState_STATE state) {
-    PyGILState_Release(state);
-    releases++;
-}
-
 struct sim_time {
     uint32_t high;
     uint32_t low;
@@ -184,12 +178,6 @@ struct sim_time {
  * @brief   Handle a callback coming from GPI
  * @ingroup python_c_api
  *
- * GILState before calling: Unknown
- *
- * GILState after calling: Unknown
- *
- * Makes one call to TAKE_GIL and one call to DROP_GIL
- *
  * Returns 0 on success or 1 on a failure.
  *
  * Handles a callback from the simulator, all of which call this function.
@@ -199,88 +187,51 @@ struct sim_time {
  * fired. The scheduler can then call next() on all the coroutines that
  * are waiting on that particular trigger.
  *
- * TODO:
- *  - Tidy up return values
- *  - Ensure cleanup correctly in exception cases
- *
  */
 int handle_gpi_callback(void *user_data) {
-    int ret = 0;
     to_python();
-    callback_data *cb_data = (callback_data *)user_data;
+    DEFER(to_simulator());
+
+    PythonCallback *cb_data = (PythonCallback *)user_data;
 
     if (cb_data->id_value != COCOTB_ACTIVE_ID) {
         fprintf(stderr, "Userdata corrupted!\n");
-        ret = 1;
-        goto err;
+        return 1;
     }
     cb_data->id_value = COCOTB_INACTIVE_ID;
 
-    PyGILState_STATE gstate;
-    gstate = TAKE_GIL();
+    PyGILState_STATE gstate = PyGILState_Ensure();
+    DEFER(PyGILState_Release(gstate));
 
     // Python allowed
 
     if (!PyCallable_Check(cb_data->function)) {
         fprintf(stderr, "Callback fired but function isn't callable?!\n");
-        ret = 1;
-        goto out;
+        return 1;
     }
 
-    {
-        // Call the callback
-        PyObject *pValue =
-            PyObject_Call(cb_data->function, cb_data->args, cb_data->kwargs);
+    // Call the callback
+    PyObject *pValue =
+        PyObject_Call(cb_data->function, cb_data->args, cb_data->kwargs);
 
-        // If the return value is NULL a Python exception has occurred
-        // The best thing to do here is shutdown as any subsequent
-        // calls will go back to Python which is now in an unknown state
-        if (pValue == NULL) {
-            fprintf(stderr,
-                    "ERROR: called callback function threw exception\n");
-            PyErr_Print();
-
-            gpi_sim_end();
-            ret = 0;
-            goto out;
-        }
-
-        // Free up our mess
-        Py_DECREF(pValue);
+    // If the return value is NULL a Python exception has occurred
+    // The best thing to do here is shutdown as any subsequent
+    // calls will go back to Python which is now in an unknown state
+    if (pValue == NULL) {
+        PyErr_Print();
+        gpi_sim_end();
+        return 0;
     }
 
-    // Callbacks may have been re-enabled
+    // We don't care about the result
+    Py_DECREF(pValue);
+
+    // Remove callback data if no longer active
     if (cb_data->id_value == COCOTB_INACTIVE_ID) {
-        Py_DECREF(cb_data->function);
-        Py_DECREF(cb_data->args);
-
-        // Free the callback data
-        free(cb_data);
+        delete cb_data;
     }
 
-out:
-    DROP_GIL(gstate);
-
-err:
-    to_simulator();
-    return ret;
-}
-
-static callback_data *callback_data_new(PyObject *func, PyObject *args,
-                                        PyObject *kwargs) {
-    callback_data *data = (callback_data *)malloc(sizeof(callback_data));
-    if (data == NULL) {
-        PyErr_NoMemory();
-        return NULL;
-    }
-
-    data->_saved_thread_state = PyThreadState_Get();
-    data->id_value = COCOTB_ACTIVE_ID;
-    data->function = func;
-    data->args = args;
-    data->kwargs = kwargs;
-
-    return data;
+    return 0;
 }
 
 // Register a callback for read-only state of sim
@@ -317,10 +268,7 @@ static PyObject *register_readonly_callback(PyObject *, PyObject *args) {
         return NULL;
     }
 
-    callback_data *cb_data = callback_data_new(function, fArgs, NULL);
-    if (cb_data == NULL) {
-        return NULL;
-    }
+    PythonCallback *cb_data = new PythonCallback(function, fArgs, NULL);
 
     gpi_cb_hdl hdl = gpi_register_readonly_callback(
         (gpi_function_t)handle_gpi_callback, cb_data);
@@ -361,10 +309,7 @@ static PyObject *register_rwsynch_callback(PyObject *, PyObject *args) {
         return NULL;
     }
 
-    callback_data *cb_data = callback_data_new(function, fArgs, NULL);
-    if (cb_data == NULL) {
-        return NULL;
-    }
+    PythonCallback *cb_data = new PythonCallback(function, fArgs, NULL);
 
     gpi_cb_hdl hdl = gpi_register_readwrite_callback(
         (gpi_function_t)handle_gpi_callback, cb_data);
@@ -405,10 +350,7 @@ static PyObject *register_nextstep_callback(PyObject *, PyObject *args) {
         return NULL;
     }
 
-    callback_data *cb_data = callback_data_new(function, fArgs, NULL);
-    if (cb_data == NULL) {
-        return NULL;
-    }
+    PythonCallback *cb_data = new PythonCallback(function, fArgs, NULL);
 
     gpi_cb_hdl hdl = gpi_register_nexttime_callback(
         (gpi_function_t)handle_gpi_callback, cb_data);
@@ -468,10 +410,7 @@ static PyObject *register_timed_callback(PyObject *, PyObject *args) {
         return NULL;
     }
 
-    callback_data *cb_data = callback_data_new(function, fArgs, NULL);
-    if (cb_data == NULL) {
-        return NULL;
-    }
+    PythonCallback *cb_data = new PythonCallback(function, fArgs, NULL);
 
     gpi_cb_hdl hdl = gpi_register_timed_callback(
         (gpi_function_t)handle_gpi_callback, cb_data, time);
@@ -522,7 +461,7 @@ static PyObject *register_value_change_callback(
     Py_INCREF(function);
 
     PyObject *pedge = PyTuple_GetItem(args, 2);
-    int edge = (int)PyLong_AsLong(pedge);
+    gpi_edge_e edge = (gpi_edge_e)PyLong_AsLong(pedge);
 
     // Remaining args for function
     PyObject *fArgs = PyTuple_GetSlice(args, 3, numargs);  // New reference
@@ -530,10 +469,7 @@ static PyObject *register_value_change_callback(
         return NULL;
     }
 
-    callback_data *cb_data = callback_data_new(function, fArgs, NULL);
-    if (cb_data == NULL) {
-        return NULL;
-    }
+    PythonCallback *cb_data = new PythonCallback(function, fArgs, NULL);
 
     gpi_cb_hdl hdl = gpi_register_value_change_callback(
         (gpi_function_t)handle_gpi_callback, cb_data, sig_hdl, edge);
@@ -1019,8 +955,6 @@ static int add_module_constants(PyObject *simulator) {
         PyModule_AddIntConstant(simulator, "MEMORY", GPI_MEMORY) < 0 ||
         PyModule_AddIntConstant(simulator, "MODULE", GPI_MODULE) < 0 ||
         PyModule_AddIntConstant(simulator, "NET", GPI_NET) < 0 ||
-        // PyModule_AddIntConstant(simulator, "PARAMETER", GPI_PARAMETER ) < 0
-        // ||  // Deprecated
         PyModule_AddIntConstant(simulator, "REG", GPI_REGISTER) < 0 ||
         PyModule_AddIntConstant(simulator, "NETARRAY", GPI_ARRAY) < 0 ||
         PyModule_AddIntConstant(simulator, "ENUM", GPI_ENUM) < 0 ||
@@ -1034,7 +968,12 @@ static int add_module_constants(PyObject *simulator) {
         PyModule_AddIntConstant(simulator, "PACKAGE", GPI_PACKAGE) < 0 ||
         PyModule_AddIntConstant(simulator, "OBJECTS", GPI_OBJECTS) < 0 ||
         PyModule_AddIntConstant(simulator, "DRIVERS", GPI_DRIVERS) < 0 ||
-        PyModule_AddIntConstant(simulator, "LOADS", GPI_LOADS) < 0 || false) {
+        PyModule_AddIntConstant(simulator, "LOADS", GPI_LOADS) < 0 ||
+        PyModule_AddIntConstant(simulator, "RISING", GPI_RISING) < 0 ||
+        PyModule_AddIntConstant(simulator, "FALLING", GPI_FALLING) < 0 ||
+        PyModule_AddIntConstant(simulator, "VALUE_CHANGE", GPI_VALUE_CHANGE) <
+            0 ||
+        false) {
         return -1;
     }
 

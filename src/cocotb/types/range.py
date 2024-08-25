@@ -1,10 +1,13 @@
 # Copyright cocotb contributors
 # Licensed under the Revised BSD License, see LICENSE for details.
 # SPDX-License-Identifier: BSD-3-Clause
-import typing
+from functools import lru_cache
+from typing import Iterator, Optional, Sequence, Union, overload
+
+from cocotb._utils import cached_method
 
 
-class Range(typing.Sequence[int]):
+class Range(Sequence[int]):
     r"""
     Variant of :class:`range` with inclusive right bound.
 
@@ -63,25 +66,23 @@ class Range(typing.Sequence[int]):
         right: rightmost bound of range (inclusive)
     """
 
-    __slots__ = ("_range",)
-
-    @typing.overload
+    @overload
     def __init__(self, left: int, direction: int) -> None:
         pass  # pragma: no cover
 
-    @typing.overload
+    @overload
     def __init__(self, left: int, direction: str, right: int) -> None:
         pass  # pragma: no cover
 
-    @typing.overload
+    @overload
     def __init__(self, left: int, *, right: int) -> None:
         pass  # pragma: no cover
 
     def __init__(
         self,
         left: int,
-        direction: typing.Union[int, str, None] = None,
-        right: typing.Union[int, None] = None,
+        direction: Union[int, str, None] = None,
+        right: Union[int, None] = None,
     ) -> None:
         start = left
         stop: int
@@ -89,11 +90,11 @@ class Range(typing.Sequence[int]):
         if isinstance(direction, int) and right is None:
             step = _guess_step(left, direction)
             stop = direction + step
-        elif direction is None and isinstance(right, int):
-            step = _guess_step(left, right)
-            stop = right + step
         elif isinstance(direction, str) and isinstance(right, int):
             step = _direction_to_step(direction)
+            stop = right + step
+        elif direction is None and isinstance(right, int):
+            step = _guess_step(left, right)
             stop = right + step
         else:
             raise TypeError("invalid arguments")
@@ -130,15 +131,15 @@ class Range(typing.Sequence[int]):
     def __len__(self) -> int:
         return len(self._range)
 
-    @typing.overload
+    @overload
     def __getitem__(self, item: int) -> int:
         pass  # pragma: no cover
 
-    @typing.overload
+    @overload
     def __getitem__(self, item: slice) -> "Range":
         pass  # pragma: no cover
 
-    def __getitem__(self, item: typing.Union[int, slice]) -> typing.Union[int, "Range"]:
+    def __getitem__(self, item: Union[int, slice]) -> Union[int, "Range"]:
         if isinstance(item, int):
             return self._range[item]
         elif isinstance(item, slice):
@@ -150,10 +151,10 @@ class Range(typing.Sequence[int]):
     def __contains__(self, item: object) -> bool:
         return item in self._range
 
-    def __iter__(self) -> typing.Iterator[int]:
+    def __iter__(self) -> Iterator[int]:
         return iter(self._range)
 
-    def __reversed__(self) -> typing.Iterator[int]:
+    def __reversed__(self) -> Iterator[int]:
         return reversed(self._range)
 
     def __eq__(self, other: object) -> bool:
@@ -170,6 +171,14 @@ class Range(typing.Sequence[int]):
     def __repr__(self) -> str:
         return f"{type(self).__qualname__}({self.left!r}, {self.direction!r}, {self.right!r})"
 
+    @cached_method
+    def index(self, value: int, start: int = 0, stop: Optional[int] = None) -> int:
+        # Using a cached version of collections.abc.Sequence.index because range.index
+        # doesn't support start and stop, and the version in Sequence is slow, but does
+        # support start and stop.
+        # Range is immutable, so caching this is fine.
+        return super().index(value, start, stop)
+
 
 def _guess_step(left: int, right: int) -> int:
     if left <= right:
@@ -177,6 +186,7 @@ def _guess_step(left: int, right: int) -> int:
     return -1
 
 
+@lru_cache(maxsize=None)
 def _direction_to_step(direction: str) -> int:
     direction = direction.lower()
     if direction == "to":

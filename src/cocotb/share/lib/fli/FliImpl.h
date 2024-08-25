@@ -29,6 +29,8 @@
 #define COCOTB_FLI_IMPL_H_
 
 #include <exports.h>
+
+#include "gpi.h"
 #ifdef COCOTBFLI_EXPORTS
 #define COCOTBFLI_EXPORT COCOTB_EXPORT
 #else
@@ -67,7 +69,8 @@ class FliProcessCbHdl : public virtual GpiCbHdl {
 // One class of callbacks uses mti_Sensitize to react to a signal
 class FliSignalCbHdl : public FliProcessCbHdl, public GpiValueCbHdl {
   public:
-    FliSignalCbHdl(GpiImplInterface *impl, FliSignalObjHdl *sig_hdl, int edge);
+    FliSignalCbHdl(GpiImplInterface *impl, FliSignalObjHdl *sig_hdl,
+                   gpi_edge_e edge);
 
     int arm_callback() override;
     int cleanup_callback() override {
@@ -79,13 +82,10 @@ class FliSignalCbHdl : public FliProcessCbHdl, public GpiValueCbHdl {
 };
 
 // All other callbacks are related to the simulation phasing
-class FliSimPhaseCbHdl : public FliProcessCbHdl, public GpiCommonCbHdl {
+class FliSimPhaseCbHdl : public FliProcessCbHdl {
   public:
     FliSimPhaseCbHdl(GpiImplInterface *impl, mtiProcessPriorityT priority)
-        : GpiCbHdl(impl),
-          FliProcessCbHdl(impl),
-          GpiCommonCbHdl(impl),
-          m_priority(priority) {}
+        : GpiCbHdl(impl), FliProcessCbHdl(impl), m_priority(priority) {}
 
     int arm_callback() override;
 
@@ -132,7 +132,7 @@ class FliShutdownCbHdl : public FliProcessCbHdl {
     int cleanup_callback() override;
 };
 
-class FliTimedCbHdl : public FliProcessCbHdl, public GpiCommonCbHdl {
+class FliTimedCbHdl : public FliProcessCbHdl {
   public:
     FliTimedCbHdl(GpiImplInterface *impl, uint64_t time);
 
@@ -177,23 +177,18 @@ class FliSignalObjHdl : public GpiSignalObjHdl, public FliObj {
                     bool is_const, int acc_type, int acc_full_type, bool is_var)
         : GpiSignalObjHdl(impl, hdl, objtype, is_const),
           FliObj(acc_type, acc_full_type),
-          m_is_var(is_var),
-          m_rising_cb(impl, this, GPI_RISING),
-          m_falling_cb(impl, this, GPI_FALLING),
-          m_either_cb(impl, this, GPI_FALLING | GPI_RISING) {}
+          m_is_var(is_var) {}
 
     int initialise(const std::string &name,
                    const std::string &fq_name) override;
-    GpiCbHdl *register_value_change_callback(int edge, int (*function)(void *),
+    GpiCbHdl *register_value_change_callback(gpi_edge_e edge,
+                                             int (*function)(void *),
                                              void *cb_data) override;
 
     bool is_var() { return m_is_var; }
 
   protected:
     bool m_is_var;
-    FliSignalCbHdl m_rising_cb;
-    FliSignalCbHdl m_falling_cb;
-    FliSignalCbHdl m_either_cb;
 };
 
 class FliValueObjHdl : public FliSignalObjHdl {

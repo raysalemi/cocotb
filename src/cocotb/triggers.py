@@ -52,10 +52,11 @@ from typing import (
 import cocotb.handle
 import cocotb.task
 from cocotb import simulator
+from cocotb._deprecation import deprecated
 from cocotb._outcomes import Error, Outcome, Value
 from cocotb._py_compat import cached_property
 from cocotb._utils import ParameterizedSingletonMetaclass, remove_traceback_frames
-from cocotb.sim_time_utils import get_sim_steps, get_time_from_sim_steps
+from cocotb.utils import get_sim_steps, get_time_from_sim_steps
 
 T = TypeVar("T")
 
@@ -119,7 +120,7 @@ class Trigger(Awaitable["Trigger"]):
         # Ensure if a trigger drops out of scope we remove any pending callbacks
         self._unprime()
 
-    def __await__(self: Self) -> Generator[Self, None, Self]:
+    def __await__(self: Self) -> Generator[Any, Any, Self]:
         yield self
         return self
 
@@ -361,7 +362,7 @@ class RisingEdge(_EdgeBase):
         not just from ``0`` to ``1`` like the ``rising_edge`` function in VHDL.
     """
 
-    _edge_type = 1
+    _edge_type = simulator.RISING
 
     @classmethod
     def __singleton_key__(
@@ -390,7 +391,7 @@ class FallingEdge(_EdgeBase):
         not just from ``1`` to ``0`` like the ``falling_edge`` function in VHDL.
     """
 
-    _edge_type = 2
+    _edge_type = simulator.FALLING
 
     @classmethod
     def __singleton_key__(
@@ -413,7 +414,7 @@ class Edge(_EdgeBase):
         TypeError: If the signal is not an object which can change value.
     """
 
-    _edge_type = 3
+    _edge_type = simulator.VALUE_CHANGE
 
     @classmethod
     def __singleton_key__(
@@ -433,7 +434,7 @@ class _Event(Trigger):
     can maintain a unique mapping of triggers to tasks.
     """
 
-    def __init__(self, parent: "Event[Any]") -> None:
+    def __init__(self, parent: "Event") -> None:
         super().__init__()
         self._parent = parent
 
@@ -446,7 +447,7 @@ class _Event(Trigger):
         return f"<{self._parent!r}.wait() at {_pointer_str(self)}>"
 
 
-class Event(Generic[T]):
+class Event:
     r"""A way to signal an event across :class:`~cocotb.task.Task`\ s.
 
     ``await``\ ing the result of :meth:`wait()` will block the ``await``\ ing :class:`~cocotb.task.Task`
@@ -471,23 +472,25 @@ class Event(Generic[T]):
             e.set()
             await NullTrigger()  # allows task1 to execute
             # resuming!
+
+    .. versionremoved:: 2.0
+
+        Removed the undocumented *data* attribute and argument to :meth:`set`.
     """
 
     def __init__(self, name: Optional[str] = None) -> None:
         self._pending_events: List[_Event] = []
         self.name: Optional[str] = name
         self._fired: bool = False
-        self.data: Optional[T] = None
 
     def _prime_trigger(
         self, trigger: _Event, callback: Callable[[Trigger], None]
     ) -> None:
         self._pending_events.append(trigger)
 
-    def set(self, data: Optional[T] = None) -> None:
-        """Unblock all coroutines blocked on this event."""
+    def set(self) -> None:
+        """Set the Event and unblock all Tasks blocked on this Event."""
         self._fired = True
-        self.data = data
 
         pending_events, self._pending_events = self._pending_events, []
         for event in pending_events:
@@ -507,7 +510,7 @@ class Event(Generic[T]):
         return _Event(self)
 
     def clear(self) -> None:
-        """Clear this event that has fired.
+        """Clear this event that has been set.
 
         Subsequent calls to :meth:`~cocotb.triggers.Event.wait` will block until
         :meth:`~cocotb.triggers.Event.set` is called again.
@@ -526,7 +529,7 @@ class Event(Generic[T]):
         return fmt.format(type(self).__qualname__, self.name, _pointer_str(self))
 
 
-class _InternalEvent(Trigger, Generic[T]):
+class _InternalEvent(Trigger):
     """Event used internally for triggers that need cross-:class:`~cocotb.task.Task` synchronization.
 
     This Event can only be waited on once, by a single :class:`~cocotb.task.Task`.
@@ -540,7 +543,6 @@ class _InternalEvent(Trigger, Generic[T]):
         self._parent = parent
         self._callback: Optional[Callable[[Trigger], None]] = None
         self.fired: bool = False
-        self.data: Optional[T] = None
 
     def _prime(self, callback: Callable[[Trigger], None]) -> None:
         if self._callback is not None:
@@ -550,10 +552,9 @@ class _InternalEvent(Trigger, Generic[T]):
         if self.fired:
             self._callback(self)
 
-    def set(self, data: Optional[T] = None) -> None:
+    def set(self) -> None:
         """Wake up coroutine blocked on this event."""
         self.fired = True
-        self.data = data
 
         if self._callback is not None:
             self._callback(self)
@@ -564,7 +565,7 @@ class _InternalEvent(Trigger, Generic[T]):
 
     def __await__(
         self: Self,
-    ) -> Generator[Self, None, Self]:
+    ) -> Generator[Any, Any, Self]:
         if self._primed:
             raise RuntimeError("Only one Task may await this Trigger")
         yield self
@@ -711,12 +712,40 @@ class NullTrigger(Trigger):
         return fmt.format(type(self).__qualname__, self.name, _pointer_str(self))
 
 
-class Join(
+class _Join(
     Trigger,
     Generic[T],
     metaclass=_ParameterizedSingletonGPITriggerMetaclass,
 ):
-    r"""Fires when a task completes.
+    """Fires when a :class:`~cocotb.task.Task` completes."""
+
+    @classmethod
+    def __singleton_key__(cls, task: "cocotb.task.Task[T]") -> "cocotb.task.Task[T]":
+        return task
+
+    def __init__(self, task: "cocotb.task.Task[T]") -> None:
+        super().__init__()
+        self._task = task
+
+    def _prime(self, callback: Callable[[Trigger], None]) -> None:
+        if self._task.done():
+            callback(self)
+        else:
+            super()._prime(callback)
+
+    def __repr__(self) -> str:
+        return f"Join({self._task!s})"
+
+    def __await__(self) -> Generator[Any, Any, T]:
+        yield from super().__await__()
+        return self._task.result()
+
+
+@deprecated(
+    "Using `task` directly is prefered to `Join(task)` in all situations where the latter could be used."
+)
+def Join(task: "cocotb.task.Task[T]") -> "_Join[T]":
+    r"""Fires when a :class:`~cocotb.task.Task` completes.
 
     Args:
         task: The task upon which to wait for completion.
@@ -729,44 +758,15 @@ class Join(
 
 
         task = cocotb.start_soon(coro_inner())
-        await Join(task)
+        result = await Join(task)
         assert task.result() == "Hello world"
+        assert task.result() == result
 
-    .. versionchanged:: 2.0
+    .. deprecated:: 2.0
 
-        :keyword:`await`\ ing this trigger no longer returns the result of the task, but returns the trigger.
-        To get the result, use :meth:`Task.result() <cocotb.task.Task.result>` of the completed task,
-        or simply ``await task`` to get the old behavior.
-
-    .. note::
-        Typically there is no reason to directly instantiate this trigger,
-        instead call :meth:`Task.join() <cocotb.task.Task.join>` on the task.
+        Using ``task`` directly is prefered to ``Join(task)`` in all situations where the latter could be used.
     """
-
-    @classmethod
-    def __singleton_key__(cls, task: "cocotb.task.Task[T]") -> "cocotb.task.Task[T]":
-        return task
-
-    def __init__(self, task: "cocotb.task.Task[T]") -> None:
-        super().__init__()
-        self._task = task
-
-    @property
-    def task(self) -> "cocotb.task.Task[T]":
-        """Return the :class:`~cocotb.task.Task` being joined.
-
-        .. versionadded:: 2.0
-        """
-        return self._task
-
-    def _prime(self, callback: Callable[[Trigger], None]) -> None:
-        if self._task.done():
-            callback(self)
-        else:
-            super()._prime(callback)
-
-    def __repr__(self) -> str:
-        return f"{type(self).__qualname__}({self._task!s})"
+    return _Join(task)
 
 
 class Waitable(Awaitable[T]):
@@ -838,7 +838,7 @@ class Combine(_AggregateWaitable["Combine"]):
 
     async def _wait(self) -> "Combine":
         waiters: List[cocotb.task.Task[Any]] = []
-        e = _InternalEvent[Any](self)
+        e = _InternalEvent(self)
         triggers = list(self._triggers)
 
         # start a parallel task for each trigger
@@ -890,7 +890,7 @@ class First(_AggregateWaitable[Any]):
 
     async def _wait(self) -> Any:
         waiters: List[cocotb.task.Task[Any]] = []
-        e = _InternalEvent[Any](self)
+        e = _InternalEvent(self)
         completed: List[Outcome[Any]] = []
         # start a parallel task for each trigger
         for t in self._triggers:

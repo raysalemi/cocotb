@@ -29,6 +29,8 @@
 #define COCOTB_VHPI_IMPL_H_
 
 #include <exports.h>
+
+#include "gpi.h"
 #ifdef COCOTBVHPI_EXPORTS
 #define COCOTBVHPI_EXPORT COCOTB_EXPORT
 #else
@@ -113,31 +115,26 @@ class VhpiSignalObjHdl;
 
 class VhpiValueCbHdl : public VhpiCbHdl, public GpiValueCbHdl {
   public:
-    VhpiValueCbHdl(GpiImplInterface *impl, VhpiSignalObjHdl *sig, int edge);
+    VhpiValueCbHdl(GpiImplInterface *impl, VhpiSignalObjHdl *sig,
+                   gpi_edge_e edge);
     int cleanup_callback() override { return VhpiCbHdl::cleanup_callback(); }
 
   private:
     std::string initial_value;
 };
 
-class VhpiCommonCbHdl : public VhpiCbHdl, public GpiCommonCbHdl {
-  public:
-    VhpiCommonCbHdl(GpiImplInterface *impl)
-        : GpiCbHdl(impl), VhpiCbHdl(impl), GpiCommonCbHdl(impl) {}
-};
-
-class VhpiTimedCbHdl : public VhpiCommonCbHdl {
+class VhpiTimedCbHdl : public VhpiCbHdl {
   public:
     VhpiTimedCbHdl(GpiImplInterface *impl, uint64_t time);
     int cleanup_callback() override;
 };
 
-class VhpiReadOnlyCbHdl : public VhpiCommonCbHdl {
+class VhpiReadOnlyCbHdl : public VhpiCbHdl {
   public:
     VhpiReadOnlyCbHdl(GpiImplInterface *impl);
 };
 
-class VhpiNextPhaseCbHdl : public VhpiCommonCbHdl {
+class VhpiNextPhaseCbHdl : public VhpiCbHdl {
   public:
     VhpiNextPhaseCbHdl(GpiImplInterface *impl);
 };
@@ -164,7 +161,7 @@ class VhpiShutdownCbHdl : public VhpiCbHdl {
     }
 };
 
-class VhpiReadWriteCbHdl : public VhpiCommonCbHdl {
+class VhpiReadWriteCbHdl : public VhpiCbHdl {
   public:
     VhpiReadWriteCbHdl(GpiImplInterface *impl);
 };
@@ -194,10 +191,7 @@ class VhpiSignalObjHdl : public GpiSignalObjHdl {
   public:
     VhpiSignalObjHdl(GpiImplInterface *impl, vhpiHandleT hdl,
                      gpi_objtype_t objtype, bool is_const)
-        : GpiSignalObjHdl(impl, hdl, objtype, is_const),
-          m_rising_cb(impl, this, GPI_RISING),
-          m_falling_cb(impl, this, GPI_FALLING),
-          m_either_cb(impl, this, GPI_FALLING | GPI_RISING) {}
+        : GpiSignalObjHdl(impl, hdl, objtype, is_const) {}
     ~VhpiSignalObjHdl() override;
 
     const char *get_signal_value_binstr() override;
@@ -216,16 +210,14 @@ class VhpiSignalObjHdl : public GpiSignalObjHdl {
     /* Value change callback accessor */
     int initialise(const std::string &name,
                    const std::string &fq_name) override;
-    GpiCbHdl *register_value_change_callback(int edge, int (*function)(void *),
+    GpiCbHdl *register_value_change_callback(gpi_edge_e edge,
+                                             int (*function)(void *),
                                              void *cb_data) override;
 
   protected:
     vhpiEnumT chr2vhpi(char value);
     vhpiValueT m_value;
     vhpiValueT m_binvalue;
-    VhpiValueCbHdl m_rising_cb;
-    VhpiValueCbHdl m_falling_cb;
-    VhpiValueCbHdl m_either_cb;
 };
 
 class VhpiLogicSignalObjHdl : public VhpiSignalObjHdl {

@@ -1,17 +1,16 @@
 # Copyright cocotb contributors
 # Licensed under the Revised BSD License, see LICENSE for details.
 # SPDX-License-Identifier: BSD-3-Clause
-import typing
+from typing import Iterable, Iterator, Optional, TypeVar, Union, cast, overload
 
 from cocotb.types import ArrayLike
 from cocotb.types.range import Range
 
-T = typing.TypeVar("T")
+T = TypeVar("T")
 
 
 class Array(ArrayLike[T]):
-    r"""
-    Fixed-size, arbitrarily-indexed, homogeneous collection type.
+    r"""Fixed-size, arbitrarily-indexed, homogeneous collection type.
 
     Arrays are similar to, but different from Python :class:`list`\ s.
     An array can store values of any type or values of multiple types at a time, just like a :class:`list`.
@@ -20,6 +19,7 @@ class Array(ArrayLike[T]):
     The indexes of an array can start or end at any integer value, they are not limited to 0-based indexing.
     Indexing schemes can be either ascending or descending in value.
     An array's indexes are described using a :class:`~cocotb.types.Range` object.
+
     Initial values are treated as iterables, which are copied into an internal buffer.
 
     .. code-block:: python3
@@ -122,12 +122,7 @@ class Array(ArrayLike[T]):
         TypeError: When invalid argument types are used.
     """
 
-    __slots__ = (
-        "_value",
-        "_range",
-    )
-
-    def __init__(self, value: typing.Iterable[T], range: typing.Optional[Range] = None):
+    def __init__(self, value: Iterable[T], range: Optional[Range] = None):
         self._value = list(value)
         if range is None:
             self._range = Range(0, "to", len(self._value) - 1)
@@ -154,10 +149,10 @@ class Array(ArrayLike[T]):
             )
         self._range = new_range
 
-    def __iter__(self) -> typing.Iterator[T]:
+    def __iter__(self) -> Iterator[T]:
         return iter(self._value)
 
-    def __reversed__(self) -> typing.Iterator[T]:
+    def __reversed__(self) -> Iterator[T]:
         return reversed(self._value)
 
     def __contains__(self, item: object) -> bool:
@@ -171,15 +166,13 @@ class Array(ArrayLike[T]):
         else:
             return NotImplemented
 
-    @typing.overload
+    @overload
     def __getitem__(self, item: int) -> T: ...
 
-    @typing.overload
+    @overload
     def __getitem__(self, item: slice) -> "Array[T]": ...
 
-    def __getitem__(
-        self, item: typing.Union[int, slice]
-    ) -> typing.Union[T, "Array[T]"]:
+    def __getitem__(self, item: Union[int, slice]) -> Union[T, "Array[T]"]:
         if isinstance(item, int):
             idx = self._translate_index(item)
             return self._value[idx]
@@ -199,18 +192,18 @@ class Array(ArrayLike[T]):
             return Array(value=value, range=range)
         raise TypeError(f"indexes must be ints or slices, not {type(item).__name__}")
 
-    @typing.overload
+    @overload
     def __setitem__(self, item: int, value: T) -> None: ...
 
-    @typing.overload
-    def __setitem__(self, item: slice, value: typing.Iterable[T]) -> None: ...
+    @overload
+    def __setitem__(self, item: slice, value: Iterable[T]) -> None: ...
 
     def __setitem__(
-        self, item: typing.Union[int, slice], value: typing.Union[T, typing.Iterable[T]]
+        self, item: Union[int, slice], value: Union[T, Iterable[T]]
     ) -> None:
         if isinstance(item, int):
             idx = self._translate_index(item)
-            self._value[idx] = typing.cast(T, value)
+            self._value[idx] = cast(T, value)
         elif isinstance(item, slice):
             start = item.start if item.start is not None else self.left
             stop = item.stop if item.stop is not None else self.right
@@ -222,7 +215,7 @@ class Array(ArrayLike[T]):
                 raise IndexError(
                     f"slice [{start}:{stop}] direction does not match array direction [{self.left}:{self.right}]"
                 )
-            value = list(typing.cast(typing.Iterable[T], value))
+            value = list(cast(Iterable[T], value))
             if len(value) != (stop_i - start_i + 1):
                 raise ValueError(
                     f"value of length {len(value)!r} will not fit in slice [{start}:{stop}]"

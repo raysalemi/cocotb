@@ -26,6 +26,7 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  ******************************************************************************/
 
+#include "gpi.h"
 #include "gpi_priv.h"
 
 const char *GpiObjHdl::get_name_str() { return m_name.c_str(); }
@@ -83,12 +84,12 @@ gpi_cb_state_e GpiCbHdl::get_call_state() { return m_state; }
 
 GpiCbHdl::~GpiCbHdl() {}
 
-int GpiCommonCbHdl::run_callback() {
+int GpiCbHdl::run_callback() {
     this->gpi_function(m_cb_data);
     return 0;
 }
 
-int GpiCommonCbHdl::set_user_data(int (*gpi_function)(void *), void *data) {
+int GpiCbHdl::set_user_data(int (*gpi_function)(void *), void *data) {
     if (!gpi_function) {
         LOG_ERROR("gpi_function to set_user_data is NULL");
     }
@@ -98,14 +99,22 @@ int GpiCommonCbHdl::set_user_data(int (*gpi_function)(void *), void *data) {
 }
 
 GpiValueCbHdl::GpiValueCbHdl(GpiImplInterface *impl, GpiSignalObjHdl *signal,
-                             int edge)
-    : GpiCbHdl(impl), GpiCommonCbHdl(impl), m_signal(signal) {
-    if (edge == (GPI_RISING | GPI_FALLING))
-        required_value = "X";
-    else if (edge & GPI_RISING)
-        required_value = "1";
-    else if (edge & GPI_FALLING)
-        required_value = "0";
+                             gpi_edge_e edge)
+    : GpiCbHdl(impl), m_signal(signal) {
+    switch (edge) {
+        case GPI_RISING: {
+            required_value = "1";
+            break;
+        }
+        case GPI_FALLING: {
+            required_value = "0";
+            break;
+        }
+        case GPI_VALUE_CHANGE: {
+            required_value = "X";
+            break;
+        }
+    }
 }
 
 int GpiValueCbHdl::run_callback() {

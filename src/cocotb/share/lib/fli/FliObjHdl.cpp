@@ -32,37 +32,22 @@
 
 #include "FliImpl.h"
 #include "_vendor/fli/acc_vhdl.h"
+#include "gpi.h"
 
 using std::abs;
 using std::to_string;
 
 GpiCbHdl *FliSignalObjHdl::register_value_change_callback(
-    int edge, int (*function)(void *), void *cb_data) {
-    FliSignalCbHdl *cb = NULL;
-
+    gpi_edge_e edge, int (*function)(void *), void *cb_data) {
     if (m_is_var) {
         return NULL;
     }
-
-    switch (edge) {
-        case 1:
-            cb = &m_rising_cb;
-            break;
-        case 2:
-            cb = &m_falling_cb;
-            break;
-        case 3:
-            cb = &m_either_cb;
-            break;
-        default:
-            return NULL;
-    }
-
+    FliSignalCbHdl *cb = new FliSignalCbHdl(m_impl, this, edge);
     if (cb->arm_callback()) {
         return NULL;
     }
     cb->set_user_data(function, cb_data);
-    return (GpiCbHdl *)cb;
+    return cb;
 }
 
 int FliObjHdl::initialise(const std::string &name, const std::string &fq_name) {
